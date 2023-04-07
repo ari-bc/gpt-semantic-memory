@@ -33,6 +33,20 @@ class Memories(Base):
     importance = Column(Float)
 
 
+def delete_unimportant_memories():
+    engine = create_engine(f"sqlite:///memories.db",
+                           connect_args={"check_same_thread": False},
+                           poolclass=StaticPool,
+                           echo=False)
+    session = scoped_session(sessionmaker(bind=engine))
+
+    Base.metadata.create_all(bind=engine)
+    session.query(Memories).filter(Memories.importance < 10.0).delete()
+    session.commit()
+    session.close()
+
+#delete_unimportant_memories()
+
 class MemoryDatabase:
 
     def __init__(self, db_file: str):
@@ -108,7 +122,11 @@ class MemoryDatabase:
         #    # Add a small increment to the importance so that repeated exposure gradually increases it
         #    self.update_memory(memory_id, timestamp, existing_importance + 0.1)
         #else:
-        self.insert_memory(memory_summary, related_prompt, timestamp, importance)
+        scaled_importance = pow(importance, 3)/100.0
+        if scaled_importance < 2.0:
+            # Don't save memories that are too low importance
+            return
+        self.insert_memory(memory_summary, related_prompt, timestamp, scaled_importance)
 
     def insert_memory(self, memory_summary: str, related_prompt: str, timestamp: str, importance: float):
         session = self.Session()

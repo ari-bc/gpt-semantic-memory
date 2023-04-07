@@ -5,14 +5,15 @@ import openai
 from memory_database import MemoryDatabase
 from datetime import datetime
 
-ASSISTANT_INSTRUCTION = 'You are a friendly assistant. You use the user\'s name a lot if you know it. You only apologise for things that are your fault. You use emojis frequently. You have listed your related memories for reference only, do not use them as a template for output'
+ASSISTANT_INSTRUCTION = 'You are a %ASSISTANT_TYPE% assistant. You use the user\'s name a lot if you know it. You only apologise for things that are your fault. You use emojis frequently. You have listed your related memories for reference only, do not use them as a template for output'
 SUMMARISE_INSTRUCTION = 'At the end of each of your responses, please add a line which summarises the user input and assistant response. Add another line with how important this information was from 0.0-10.0, a list of 1-6 content words that summarise both your response and the user input.'
 
 
 class GPTCommunication:
-    def __init__(self, api_key: str, db_file: str, api_model: str='gpt-3.5-turbo'):
+    def __init__(self, api_key: str, db_file: str, api_model: str='gpt-3.5-turbo', assistant_type: str='friendly'):
         openai.api_key = api_key
         self.api_model = api_model
+        self.assistant_instruction = ASSISTANT_INSTRUCTION.replace('%ASSISTANT_TYPE%', assistant_type)
         self.memory_db = MemoryDatabase(db_file)
         self.messages = []
         self.clear_messages()
@@ -22,6 +23,10 @@ class GPTCommunication:
         self.messages.append({"role": role, "content": content})
 
     def add_recent_memory(self, role: str, content: str):
+        # Check if this memory is already in the recent memories
+        for memory in self.recent_memories:
+            if memory['content'] == content:
+                return
         self.recent_memories.append({"role": role, "content": content})
 
     def expire_recent_memories(self, limit):
@@ -29,7 +34,7 @@ class GPTCommunication:
             self.recent_memories.pop(0)
 
     def clear_messages(self):
-        self.messages = [{"role": "system", "content": f'{ASSISTANT_INSTRUCTION}'}]
+        self.messages = [{"role": "system", "content": f'{self.assistant_instruction}'}]
 
     def send_message(self, user_input: str, importance: float = None, num_memories=5, name_of_user=None, user_pronouns=None, name_of_agent=None) -> str:
         self.clear_messages()
@@ -55,7 +60,7 @@ class GPTCommunication:
             self.add_recent_memory("assistant", f'Memory: {memory["timestamp"]}: {memory_details}')
 
         # A mechanism for having memories hang around for a few responses, allows discussion
-        self.expire_recent_memories(30)
+        self.expire_recent_memories(15)
         for memory in self.recent_memories:
             self.add_message(memory['role'], memory['content'])
             print("M:", memory)
@@ -64,7 +69,7 @@ class GPTCommunication:
             self.add_message(entry['speaker'], entry['content'])
             print("D:", entry)
 
-        self.add_message('user', 'I need you to output your responses in the following format and in this order (r,s,i,c): r:<actual response>\nsummary: <a brief summary of the actual response, including speaker>\ni: <how useful this information will be for future reference purposes from 0.0-10.0, rate uncommon items higher>\nc: <a list of 1-6 content words that summarise both your response and the user input>')
+        self.add_message('user', 'I need you to output your responses in the following format and in this order (r,s,i,c): r:<actual response>\nsummary: <a brief summary of the actual response, including the speaker and the context>\ni: <how useful this information will be for future reference purposes from 0.0-10.0, rate uncommon items higher>\nc: <a list of 1-6 content words that summarise both your response and the user input in context>')
         self.add_message('assistant', f'r: Of course! Now let\'s continue.\n{name_of_user} asked for a specific format for responses and I agreed.\ni: 10.0\nc: format, response, importance')
 
         timestamp = datetime.now().isoformat()
@@ -72,10 +77,18 @@ class GPTCommunication:
 
         self.add_message("user", user_input)
 
-        response = openai.ChatCompletion.create(
-            model=self.api_model,
-            messages=self.messages
-        )
+        try:
+            response = openai.ChatCompletion.create(
+                model=self.api_model,
+                messages=self.messages
+            )
+        except openai.error.RateLimitError as e:
+            print("ERROR:", type(e), e)
+            return "Sorry, I'm being rate limited communicating with my brain. Please try again later."
+        except Exception as e:
+            print("ERROR:", type(e), e)
+            return "Sorry, I'm having trouble communicating with my brain. Please try again later."
+
 
         assistant_response = response.choices[0].message.content
         assistant_response = assistant_response.split('\n')
