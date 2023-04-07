@@ -8,3 +8,6 @@ name_of_user=
 
 # GPT Agent name
 name_of_agent=Athena
+
+# Type of agent (arbitrary text like "whimsical and friendly" or "maniacal")
+assistant_type=friendly
