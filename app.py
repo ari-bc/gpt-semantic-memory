@@ -1,9 +1,11 @@
 from flask import Flask, render_template, request, jsonify
 from gpt_communication import GPTCommunication
 import configparser
+import os
 
 config = configparser.ConfigParser()
-config.read('config.ini')
+config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.ini')
+config.read(config_path)
 
 app = Flask(__name__)
 
