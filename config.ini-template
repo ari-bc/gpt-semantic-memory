@@ -1,0 +1,10 @@
+[default]
+openai_api_key=<key>
+openai_api_model=gpt-4
+#openai_api_model=gpt-3.5-turbo
+
+# Your name
+name_of_user=
+
+# GPT Agent name
+name_of_agent=Athena
