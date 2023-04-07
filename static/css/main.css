@@ -1,0 +1,31 @@
+#user-input {
+    width: 100%; /* Change this value to your desired width */
+    font-size: 18px; /* Change this value to your desired font-size */
+    padding: 5px 10px; /* Adjust padding for better appearance */
+    }
+
+body { font-family: Arial, sans-serif; background-color: #F3F3F3; }
+#messages { background-color: #FFFFFF; border-radius: 10px; padding: 20px; max-height: 600px; overflow-y: auto; }
+#user-input-form { display: flex; margin-top: 20px; }
+button { background-color: #4CAF50; border: none; border-radius: 5px; color: white; text-align: center; font-size: 18px; padding: 5px 10px; margin-left: 10px; cursor: pointer; }
+button:hover { background-color: #45a049; }
+
+pre {
+  background-color: #f5f5f5;
+  padding: 1em;
+  border-radius: 5px;
+  overflow-x: auto;
+}
+
+code {
+  font-family: 'Courier New', Courier, monospace;
+  white-space: pre-wrap;
+}
+
+.emoji-picker-hidden {
+  display: none;
+}
+
+.emoji-picker-shown {
+  display: block;
+}

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assistant</title>
+    <link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.7.0/styles/default.min.css">
+    <script src="https://unpkg.com/@highlightjs/cdn-assets@11.7.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/emoji-picker-element/styles/light.css">
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
+    <script type="module" src="{{ url_for('static', filename='js/emojiPicker.js') }}"></script>
+    <link id="dark-mode-css" rel="stylesheet" href="{{ url_for('static', filename='css/dark-mode.css') }}" disabled>
+</head>
+<body>
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center my-4">
+            <h1>AI Assistant</h1>
+            <button id="dark-mode-toggle" class="btn btn-secondary">Toggle Dark Mode</button>
+        </div>
+        <div id="chat" class="border rounded p-3 mb-3" style="height: 400px; overflow-y: scroll;">
+            <div id="messages"></div>
+        </div>
+        <form id="user-input-form" class="mb-3">
+            <div class="input-group">
+                <textarea id="user-input" class="pickerContainer form-control" autocomplete="off" required></textarea>
+                <div class="input-group-append">
+                    <button type="submit" class="btn btn-primary">Send</button>
+                </div>
+            </div>
+        </form>
+        <div class="text-right">
+            <button id="emoji-button" onclick="toggleEmojiPicker()">Emojis</button>
+            <div id="emoji-picker-container" class="emoji-picker-hidden" role="tooltip">
+                <emoji-picker></emoji-picker>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const darkModeToggle = document.getElementById("dark-mode-toggle");
+        const darkModeCss = document.getElementById("dark-mode-css");
+        darkModeToggle.addEventListener("click", () => {
+            document.body.classList.toggle("dark-mode");
+            darkModeCss.disabled = !darkModeCss.disabled;
+        });
+    </script>
+    <script>
+        $("#user-input-form").on("submit", function(event) {
+          event.preventDefault();
+          const user_input = $("#user-input").val();
+          const user_input_encoded = encodeURIComponent(user_input); // Add this line
+          $("#user-input").val("");
+
+          add_message("User", user_input); // Use the unencoded input for displaying the message
+          $.post("/send_message", {user_input: user_input_encoded}, function(data) {
+            response_content = sanitize_input(data.response);
+            add_message("Athena", response_content);
+          });
+        });
+
+        $("#user-input").on("keydown", function(event) {
+          if (event.keyCode === 13 && event.shiftKey) {
+            event.preventDefault();
+            $("#user-input-form").submit();
+          }
+        });
+
+        function sanitize_input(input) {
+          if (typeof input !== "string") {
+            input = input.response + "<p>\n" + input.keyPoints;
+          }
+          return input.replace(/>/g, "&gt;").replace(/</g, "&lt;").replace(/\n/g, "<br>");
+        }
+
+        function add_message(role, content) {
+            content = sanitize_input(content);
+            content = format_code(content);
+            $("#messages").append("<div><b>" + role + ":</b>" + content + "</div>");
+
+            // Scroll the messages container to the bottom
+            $("#messages").scrollTop($("#messages")[0].scrollHeight);
+
+            hljs.highlightAll();
+        }
+
+        function format_code(text) {
+            // This regular expression matches triple backticks and the content between them
+            const codeRegex = /```([\s\S]*?)```/g;
+            return text.replace(codeRegex, function (match, content) {
+                // Wraps the content between triple backticks with <pre><code> and </code></pre> tags
+                return '<pre><code>' + content + '</code></pre>';
+            });
+        }
+    </script>
+</body>
+</html>
+
