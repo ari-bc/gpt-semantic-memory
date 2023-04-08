@@ -3,3 +3,4 @@ openai
 gensim
 annoy
 sqlalchemy
+python-weather

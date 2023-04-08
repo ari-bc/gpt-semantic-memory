@@ -1,16 +1,20 @@
 import re
+import time
 
 import openai
+import threading
+import python_weather
+import requests
 
 from memory_database import MemoryDatabase
-from datetime import datetime
+from datetime import datetime, timedelta
 
-ASSISTANT_INSTRUCTION = 'You are a %ASSISTANT_TYPE% assistant. You use the user\'s name a lot if you know it. You only apologise for things that are your fault. You use emojis frequently. You have listed your related memories for reference only, do not use them as a template for output'
+ASSISTANT_INSTRUCTION = 'You are a %ASSISTANT_TYPE% assistant. You use the user\'s name a lot if you know it. You only apologise for things that are your fault. You use emojis frequently. You have listed your related memories and awarenesses for reference only, do not use them as a template for output'
 SUMMARISE_INSTRUCTION = 'At the end of each of your responses, please add a line which summarises the user input and assistant response. Add another line with how important this information was from 0.0-10.0, a list of 1-6 content words that summarise both your response and the user input.'
 
 
 class GPTCommunication:
-    def __init__(self, api_key: str, db_file: str, api_model: str='gpt-3.5-turbo', assistant_type: str='friendly'):
+    def __init__(self, api_key: str, db_file: str, api_model: str='gpt-3.5-turbo', assistant_type: str='friendly', openweathermap_api_key: str=None, weather_update_interval: int=10):
         openai.api_key = api_key
         self.api_model = api_model
         self.assistant_instruction = ASSISTANT_INSTRUCTION.replace('%ASSISTANT_TYPE%', assistant_type)
@@ -18,6 +22,18 @@ class GPTCommunication:
         self.messages = []
         self.clear_messages()
         self.recent_memories = []
+        self.current_weather = "Unknown"
+
+        self.weather_update_interval = weather_update_interval * 60  # 10 minutes
+        self.openweathermap_api_key = openweathermap_api_key
+        self.start_weather_updater()
+    def update_weather(self):
+        while True:
+            self.current_weather = self.get_weather()
+            time.sleep(self.weather_update_interval)
+    def start_weather_updater(self):
+        update_thread = threading.Thread(target=self.update_weather, daemon=True)
+        update_thread.start()
 
     def add_message(self, role: str, content: str):
         self.messages.append({"role": role, "content": content})
@@ -55,6 +71,11 @@ class GPTCommunication:
             self.add_message('assistant', f'Memory: {name_of_user} pronouns: {user_pronouns}')
         if name_of_agent is not None:
             self.add_message('assistant', f'Memory: My chosen name is {name_of_agent}')
+        # Give the agent the current time
+        self.add_message('assistant', f'Awareness: {datetime.now().isoformat()}')
+        # Give the agent the current weather, updates every 10 minutes
+        self.add_message('assistant', f'Awareness: Weather, {self.current_weather}')
+        self.add_message('assistant', f'Awareness: Location=York, UK')
         for memory in relevant_memories:
             memory_details = memory['related_prompt']
             self.add_recent_memory("assistant", f'Memory: {memory["timestamp"]}: {memory_details}')
@@ -143,6 +164,41 @@ class GPTCommunication:
         self.memory_db.save_dialogue_entry('assistant', body, timestamp)
 
         return body
+
+    def get_city_coordinates(self, city_name):
+        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city_name}&limit=1&appid={self.openweathermap_api_key}"
+        response = requests.get(url)
+        data = response.json()
+
+        if data and "lat" in data[0] and "lon" in data[0]:
+            return data[0]["lat"], data[0]["lon"]
+        else:
+            return None, None
+
+    def get_weather(self):
+        city = "York,GB"
+        lat, lon = self.get_city_coordinates(city)
+        print(lat, lon)
+
+        if lat and lon:
+            url = f"https://api.openweathermap.org/data/3.0/onecall?lat={lat}&lon={lon}&appid={self.openweathermap_api_key}&units=metric"
+            response = requests.get(url)
+            data = response.json()
+
+            if response.status_code == 200:
+                sunrise = datetime.fromtimestamp(data["current"]["sunrise"]).strftime("%H:%M")
+                sunset = datetime.fromtimestamp(data["current"]["sunset"]).strftime("%H:%M")
+                uvi = data["current"]["uvi"]
+                wind_speed = data["current"]["wind_speed"]
+                wind_degrees = data["current"]["wind_deg"]
+                temperature = data["current"]["temp"]
+                feels_like = data["current"]["feels_like"]
+                description = data["current"]["weather"][0]["description"]
+                return f"Sunrise: {sunrise}, Sunset: {sunset}, Now: {temperature}C, feels like {feels_like}C, wind speed {wind_speed}, wind direction in degrees {wind_degrees}, uv index {uvi}, {description}."
+            else:
+                return "Error fetching weather data"
+        else:
+            return "City not found."
 
     def generate_memory_summary(self, user_input: str, assistant_response: str) -> str:
         # Implement a function to generate a memory summary from user_input and assistant_response
