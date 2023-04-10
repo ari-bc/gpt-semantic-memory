@@ -6,23 +6,16 @@ import configparser
 import os
 
 config = configparser.ConfigParser()
-config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.ini')
+config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../config.ini')
 config.read(config_path)
 
 app = Flask(__name__)
 
-name_of_user = config['default']['name_of_user']
-name_of_agent = config['default']['name_of_agent']
-assistant_type = config['default']['assistant_type']
-
-openai_api_key = config['openai']['api_key']
-openai_api_model = config['openai']['api_model']
-
 openweathermap_api_key = config['openweathermap']['api_key']
-weather_update_interval = int(config['openweathermap']['update_frequency'])
+weather_update_interval = int(config['openweathermap']['update_interval'])
 
-db_file = 'memories.db'
-gpt_comm = GPTCommunication(openai_api_key, db_file, api_model=openai_api_model, assistant_type=assistant_type, openweathermap_api_key=openweathermap_api_key, weather_update_interval=weather_update_interval)
+db_file = '../memories.db'
+gpt_comm = GPTCommunication(db_file, config=config)
 
 @app.route('/')
 def index():

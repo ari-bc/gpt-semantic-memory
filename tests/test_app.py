@@ -1,6 +1,5 @@
 import unittest
 from unittest.mock import MagicMock, patch
-import gensim.downloader as api
 from flask import json
 import numpy as np
 
@@ -24,7 +23,7 @@ class TestApp(unittest.TestCase):
 
     def setUp(self):
         # Import app after patching
-        from app import app
+        from front_ends.app import app
 
         # Mock the openai request system to avoid actually calling the API
         self.patcher = patch('app.GPTCommunication.send_message')

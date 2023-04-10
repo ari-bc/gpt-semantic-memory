@@ -14,6 +14,23 @@ from sqlalchemy.pool import StaticPool
 Base = declarative_base()
 
 
+class ArbitraryData(Base):
+    __tablename__ = 'arbitrary_data'
+
+    id = Column(Integer, primary_key=True)
+    key = Column(String, nullable=False)
+    str_value = Column(String, nullable=True)
+    int_value = Column(Integer, nullable=True)
+
+
+class DialogueHistoryCompressed(Base):
+    __tablename__ = 'dialogue_history_compressed'
+
+    id = Column(Integer, primary_key=True)
+    content = Column(String, nullable=False)
+    timestamp = Column(String, nullable=False)
+
+
 class DialogueHistory(Base):
     __tablename__ = 'dialogue_history'
 
@@ -47,6 +64,7 @@ def delete_unimportant_memories():
 
 #delete_unimportant_memories()
 
+
 class MemoryDatabase:
 
     def __init__(self, db_file: str):
@@ -64,6 +82,7 @@ class MemoryDatabase:
         self.Session = scoped_session(sessionmaker(bind=engine))
 
         Base.metadata.create_all(bind=engine)
+
 
         print("Building AnnoyIndex... ", end='')
         begin_time = time.time()
@@ -90,6 +109,31 @@ class MemoryDatabase:
         session.commit()
         session.close()
 
+    def set_count(self, key: str, value: int):
+        # Set the count of a key to a specific value
+        session = self.Session()
+        arbitrary_data = session.query(ArbitraryData).filter(ArbitraryData.key == key).first()
+        if arbitrary_data is None:
+            arbitrary_data = ArbitraryData(key=key, int_value=value)
+            session.add(arbitrary_data)
+        else:
+            arbitrary_data.int_value = value
+        session.commit()
+        session.close()
+
+    def increment_count(self, key: str) -> int:
+        session = self.Session()
+        arbitrary_data = session.query(ArbitraryData).filter(ArbitraryData.key == key).first()
+        if arbitrary_data is None:
+            arbitrary_data = ArbitraryData(key=key, int_value=1)
+            session.add(arbitrary_data)
+        else:
+            arbitrary_data.int_value += 1
+        result = int(arbitrary_data.int_value)
+        session.commit()
+        session.close()
+        return result
+
     def get_dialogue_history(self, num_results: int = None, max_length: int = 2000) -> List[Dict]:
         session = self.Session()
         query = session.query(DialogueHistory).order_by(DialogueHistory.timestamp.desc())
@@ -110,6 +154,36 @@ class MemoryDatabase:
             dialogue_to_return.insert(0, entry)
 
         return [{'id': entry.id, 'speaker': entry.speaker, 'content': entry.content, 'timestamp': entry.timestamp} for
+                entry in dialogue_to_return]
+
+    def save_compressed_dialogue_entry(self, content: str, timestamp: str):
+        session = self.Session()
+        decoded_content = unquote(content)
+        new_dialogue = DialogueHistoryCompressed(content=decoded_content, timestamp=timestamp)
+        session.add(new_dialogue)
+        session.commit()
+        session.close()
+
+    def get_compressed_dialogue_history(self, num_results: int = None, max_length: int = 1000) -> List[Dict]:
+        session = self.Session()
+        query = session.query(DialogueHistoryCompressed).order_by(DialogueHistoryCompressed.timestamp.desc())
+
+        if num_results is not None:
+            query = query.limit(num_results)
+
+        dialogue_history_compressed = query.all()
+        session.close()
+
+        total_dialogue_length = 0
+        dialogue_to_return = []
+        for entry in reversed(dialogue_history_compressed):
+            content_length = len(entry.content)
+            total_dialogue_length += content_length
+            if total_dialogue_length > max_length:
+                break
+            dialogue_to_return.insert(0, entry)
+
+        return [{'id': entry.id, 'content': entry.content, 'timestamp': entry.timestamp} for
                 entry in dialogue_to_return]
 
     def save_memory(self, memory_summary: str, related_prompt: str, timestamp: str, importance: float):
