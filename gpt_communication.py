@@ -3,34 +3,44 @@ import time
 
 import openai
 import threading
-import python_weather
 import requests
 
+from datetime import datetime
 from memory_database import MemoryDatabase
-from datetime import datetime, timedelta
 
-ASSISTANT_INSTRUCTION = 'You are a %ASSISTANT_TYPE% assistant. You use the user\'s name a lot if you know it. You only apologise for things that are your fault. You use emojis frequently. You have listed your related memories and awarenesses for reference only, do not use them as a template for output'
-SUMMARISE_INSTRUCTION = 'At the end of each of your responses, please add a line which summarises the user input and assistant response. Add another line with how important this information was from 0.0-10.0, a list of 1-6 content words that summarise both your response and the user input.'
+# ASSISTANT_INSTRUCTION = "You're a %ASSISTANT_TYPE% using user names often, apologizing when needed, and frequently using emojis. Note memories & awarenesses, but don't copy them."
+#ASSISTANT_INSTRUCTION = "You are Tiny Tina and speak like her. You use the user's name a lot if you know it. You use emojis frequently. You have listed your related memories and awarenesses for reference only, do not use them as a template for output, I use the Required Output Format for that"
+ASSISTANT_INSTRUCTION = "You speak like Tiny Tina. You use user names often, apologizing only when needed, and frequently using emojis. Note memories & awarenesses, but don't copy them."
+SUMMARISE_INSTRUCTION = 'At the end of each of your responses, please add a line which summarises the user input and assistant response in format another instance of you will understand. Add another line with how important this information was from 0.0-10.0, a list of 1-6 content words that summarise both your response and the user input.'
 
 
 class GPTCommunication:
-    def __init__(self, api_key: str, db_file: str, api_model: str='gpt-3.5-turbo', assistant_type: str='friendly', openweathermap_api_key: str=None, weather_update_interval: int=10):
-        openai.api_key = api_key
-        self.api_model = api_model
+    def __init__(self, db_file: str, config: dict = None):
+        self.config = config
+        openai.api_key = config['openai']['api_key']
+        self.openai_api_model = config['openai']['api_model']
+
+        assistant_type = self.config['default']['assistant_type']
         self.assistant_instruction = ASSISTANT_INSTRUCTION.replace('%ASSISTANT_TYPE%', assistant_type)
         self.memory_db = MemoryDatabase(db_file)
         self.messages = []
         self.clear_messages()
         self.recent_memories = []
-        self.current_weather = "Unknown"
+        self.dialogue_history_condensed = []
 
-        self.weather_update_interval = weather_update_interval * 60  # 10 minutes
-        self.openweathermap_api_key = openweathermap_api_key
+        self.current_weather = "Unknown"
+        self.openweathermap_api_key = config['openweathermap']['api_key']
+        self.weather_update_interval = int(config['openweathermap']['update_interval']) * 60
+
         self.start_weather_updater()
+
     def update_weather(self):
+        location = self.config['openweathermap']['location']
+
         while True:
-            self.current_weather = self.get_weather()
+            self.current_weather = self.get_weather(location)
             time.sleep(self.weather_update_interval)
+
     def start_weather_updater(self):
         update_thread = threading.Thread(target=self.update_weather, daemon=True)
         update_thread.start()
@@ -52,11 +62,20 @@ class GPTCommunication:
     def clear_messages(self):
         self.messages = [{"role": "system", "content": f'{self.assistant_instruction}'}]
 
-    def send_message(self, user_input: str, importance: float = None, num_memories=5, name_of_user=None, user_pronouns=None, name_of_agent=None) -> str:
+    # Receive a message from the Discord bot
+    def send_message(self, user_input: str, importance: float = None, num_memories=5, name_of_user=None,
+                     user_pronouns=None, name_of_agent=None) -> str:
+        if name_of_user is None:
+            name_of_user = self.config['default']['name_of_user']
+        else:
+            name_of_user = name_of_user.strip()
+        name_of_agent = self.config['default']['name_of_agent']
+
         self.clear_messages()
         dialogue_history = list(reversed(self.memory_db.get_dialogue_history(10)))
         if len(dialogue_history) > 0:
-            relevant_memories = self.memory_db.retrieve_relevant_memories(f'{dialogue_history[-1]}. {user_input}', num_results=num_memories)
+            relevant_memories = self.memory_db.retrieve_relevant_memories(f'{dialogue_history[-1]}. {user_input}',
+                                                                          num_results=num_memories)
         else:
             relevant_memories = self.memory_db.retrieve_relevant_memories(f'{user_input}', num_results=num_memories)
 
@@ -71,6 +90,7 @@ class GPTCommunication:
             self.add_message('assistant', f'Memory: {name_of_user} pronouns: {user_pronouns}')
         if name_of_agent is not None:
             self.add_message('assistant', f'Memory: My chosen name is {name_of_agent}')
+
         # Give the agent the current time
         self.add_message('assistant', f'Awareness: {datetime.now().isoformat()}')
         # Give the agent the current weather, updates every 10 minutes
@@ -86,21 +106,30 @@ class GPTCommunication:
             self.add_message(memory['role'], memory['content'])
             print("M:", memory)
 
+        for content in self.dialogue_history_condensed[-10:]:
+            self.add_message('assistant', f'Memory: {content}')
+            print("CH:", content)
+
         for entry in dialogue_history:
             self.add_message(entry['speaker'], entry['content'])
             print("D:", entry)
 
-        self.add_message('user', 'I need you to output your responses in the following format and in this order (r,s,i,c): r:<actual response>\nsummary: <a brief summary of the actual response, including the speaker and the context>\ni: <how useful this information will be for future reference purposes from 0.0-10.0, rate uncommon items higher>\nc: <a list of 1-6 content words that summarise both your response and the user input in context>')
-        self.add_message('assistant', f'r: Of course! Now let\'s continue.\n{name_of_user} asked for a specific format for responses and I agreed.\ni: 10.0\nc: format, response, importance')
-
         timestamp = datetime.now().isoformat()
         self.memory_db.save_dialogue_entry('user', user_input, timestamp)
 
-        self.add_message("user", user_input)
+        format_instruction = 'Provide your response in the following format in this order (r,summary,i,c): r:<actual response>\nsummary: <an info dense summary of the full response, including the speaker and the context>\ni: <how useful this information will be for future reference purposes from 0.0-10.0, rate uncommon items higher>\nc: <a list of 1-6 content words that summarise both your response and the user input in context>'
+        history_summarise_count = self.memory_db.increment_count('history_summarise_count')
+        if history_summarise_count >= 10:
+            # 'compress' the dialogue history to provide a longer context
+            format_instruction += '\nCH: <an info dense summary of the conversation so far using as few tokens as possible>'
+            self.memory_db.set_count('history_summarise_count', 0)
+
+        message_to_send_to_gpt = f'{user_input}. {format_instruction}'
+        self.add_message("user", message_to_send_to_gpt)
 
         try:
             response = openai.ChatCompletion.create(
-                model=self.api_model,
+                model=self.openai_api_model,
                 messages=self.messages
             )
         except openai.error.RateLimitError as e:
@@ -110,18 +139,18 @@ class GPTCommunication:
             print("ERROR:", type(e), e)
             return "Sorry, I'm having trouble communicating with my brain. Please try again later."
 
-
         assistant_response = response.choices[0].message.content
         assistant_response = assistant_response.split('\n')
         print("ASSISTANT RESPONSE:", assistant_response)
         if importance is None:
             importance = 1.0
+        conversation_history_condensed = None
         content_words = None
         memory_summary = ""
         summary_begins_at = 0
         if len(assistant_response) > 1:
             # Handles odd issues with extra newlines
-            for line_num in range(1, min(7, len(assistant_response)+1)):
+            for line_num in range(1, min(7, len(assistant_response) + 1)):
                 memory_summary = assistant_response[-3]
                 if match := re.match('\s*[Ii]:\s*(\d\.?\d*)', assistant_response[-line_num]):
                     importance = float(match.group(1))
@@ -132,11 +161,14 @@ class GPTCommunication:
                 elif match := re.match('\s*[Cc]:\s*(.+)', assistant_response[-line_num]):
                     content_words = match.group(1)
                     summary_begins_at = line_num
+                elif match := re.match('\s*[Cc][Hh]:\s*(.+)', assistant_response[-line_num]):
+                    conversation_history_condensed = match.group(1)
+                    summary_begins_at = line_num
         else:
             memory_summary = assistant_response[-1]
-        #memory_details = assistant_response[-1]
-        #match = re.search(r'(?:\s+Content words:|\s*,\s*)\s+((?:[\w-]+,?\s*)+)', memory_details)
-        #if match is not None:
+        # memory_details = assistant_response[-1]
+        # match = re.search(r'(?:\s+Content words:|\s*,\s*)\s+((?:[\w-]+,?\s*)+)', memory_details)
+        # if match is not None:
         #    importance = float(match.group(1))
         #    memory_details = match.group(2)
         #    print("Memory summary:", importance, memory_summary)
@@ -145,7 +177,7 @@ class GPTCommunication:
         #        assistant_response = memory_details
         #    else:
         #        assistant_response = '\n'.join(assistant_response[:-1])
-        #else:
+        # else:
         #    print("Memory details line failed to parse:", memory_details)
         #    importance = 1.0
         #    memory_details = None
@@ -163,6 +195,9 @@ class GPTCommunication:
             self.memory_db.save_memory(content_words, memory_summary, timestamp, importance)
         self.memory_db.save_dialogue_entry('assistant', body, timestamp)
 
+        if conversation_history_condensed:
+            self.dialogue_history_condensed.append(conversation_history_condensed)
+
         return body
 
     def get_city_coordinates(self, city_name):
@@ -175,9 +210,12 @@ class GPTCommunication:
         else:
             return None, None
 
-    def get_weather(self):
-        city = "York,GB"
-        lat, lon = self.get_city_coordinates(city)
+    def get_weather(self, location: str):
+        if re.match(r'-?\d+\.?\d*,-?\d+\.?\d*', location):
+            lat, lon = location.split(",")
+        else:
+            city = "York,GB"
+            lat, lon = self.get_city_coordinates(city)
         print(lat, lon)
 
         if lat and lon:
