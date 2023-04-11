@@ -10,3 +10,6 @@ requests~=2.28.2
 
 discord
 pydispatcher
+
+slack-sdk
+slack-bolt

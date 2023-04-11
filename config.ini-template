@@ -22,3 +22,7 @@ application_id=<id>
 public_key=<key>
 token=<token>
 permissions_integer=274945018944
+
+[slack]
+app_token=<app_token>
+bot_token=<bot_token>
