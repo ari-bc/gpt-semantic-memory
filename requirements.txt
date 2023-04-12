@@ -13,3 +13,5 @@ pydispatcher
 
 slack-sdk
 slack-bolt
+fuzzywuzzy
+python-levenshtein

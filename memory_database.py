@@ -1,6 +1,7 @@
 import threading
 import time
 from typing import Dict, List, Sequence, Optional
+from fuzzywuzzy import fuzz, process
 from urllib.parse import unquote
 
 import gensim.downloader as api
@@ -12,6 +13,13 @@ from sqlalchemy.orm import scoped_session, sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 
 Base = declarative_base()
+
+
+class ProfileData(Base):
+    __tablename__ = 'profile_data'
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
 
 
 class ArbitraryData(Base):
@@ -62,7 +70,77 @@ def delete_unimportant_memories():
     session.commit()
     session.close()
 
-#delete_unimportant_memories()
+
+# delete_unimportant_memories()
+
+class ProfileMemory:
+
+    def __init__(self, user_id: str, display_name: str):
+        self.user_id = user_id
+        self.display_name = display_name
+        self.db_file = f'{user_id}_profile.db'
+        engine = create_engine(f"sqlite:///{self.db_file}",
+                               connect_args={"check_same_thread": False},
+                               poolclass=StaticPool,
+                               echo=False)
+        self.Session = scoped_session(sessionmaker(bind=engine))
+
+        Base.metadata.create_all(bind=engine)
+
+    def delete_key(self, key: str):
+        best_key = self.get_closest_key(key)
+        if best_key is not None:
+            session = self.Session()
+            session.query(ProfileData).filter(ProfileData.key == best_key).delete()
+            session.commit()
+            session.close()
+
+    def get_closest_key(self, key: str, threshold: int = 80) -> Optional[str]:
+        """Get the closest matching key using fuzzywuzzy for string matching"""
+        extracted = process.extract(key, self.get_all_keys())
+        if extracted is None or len(extracted) == 0:
+            return None
+
+        print("EXTRACTED:", extracted)
+        best_match = extracted[0][0]
+        score = extracted[0][1]
+
+        if score > threshold:
+            return best_match
+        else:
+            return None
+
+    def set_key_value(self, key: str, value: str):
+        """If key exists, update value, else create new key value pair"""
+        session = self.Session()
+        best_key = self.get_closest_key(key)
+        if best_key is not None:
+            print(f"Updating key: key={key}, best_key={best_key}")
+            session.query(ProfileData).filter(ProfileData.key == best_key).update({ProfileData.value: value})
+        else:
+            new_data = ProfileData(key=key, value=value)
+            session.add(new_data)
+        session.commit()
+        session.close()
+
+    def get_key_value(self, key: str, threshold: int = 95) -> Optional[str]:
+        """Get profile data closest key"""
+        best_key = self.get_closest_key(key, threshold)
+
+        if best_key is not None:
+            session = self.Session()
+            result = session.query(ProfileData).filter(ProfileData.key == best_key).first()
+            session.close()
+            return result.value
+
+        return None
+
+    def get_all_keys(self) -> List[str]:
+        """Get all keys"""
+        session = self.Session()
+        keys = [index_key.key for index_key in session.query(ProfileData.key).all()]
+        session.close()
+        return keys
 
 
 class MemoryDatabase:
@@ -82,7 +160,6 @@ class MemoryDatabase:
         self.Session = scoped_session(sessionmaker(bind=engine))
 
         Base.metadata.create_all(bind=engine)
-
 
         print("Building AnnoyIndex... ", end='')
         begin_time = time.time()
@@ -187,16 +264,16 @@ class MemoryDatabase:
                 entry in dialogue_to_return]
 
     def save_memory(self, memory_summary: str, related_prompt: str, timestamp: str, importance: float):
-        #embedding = self._generate_embedding(memory_summary)
-        #same_memory = self.find_same_memory(embedding)
+        # embedding = self._generate_embedding(memory_summary)
+        # same_memory = self.find_same_memory(embedding)
 
-        #if same_memory:
+        # if same_memory:
         #    memory_id = same_memory.id
         #    existing_importance = same_memory.importance
         #    # Add a small increment to the importance so that repeated exposure gradually increases it
         #    self.update_memory(memory_id, timestamp, existing_importance + 0.1)
-        #else:
-        scaled_importance = pow(importance, 3)/100.0
+        # else:
+        scaled_importance = pow(importance, 3) / 100.0
         if scaled_importance < 2.0:
             # Don't save memories that are too low importance
             return
@@ -272,7 +349,8 @@ class MemoryDatabase:
         """
         return np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
 
-    def retrieve_relevant_memories(self, user_input: str, num_results: int = 5, similarity_weight: float = 0.5) -> List[Dict]:
+    def retrieve_relevant_memories(self, user_input: str, num_results: int = 5, similarity_weight: float = 0.5) -> List[
+        Dict]:
         """
         Retrieve memories relevant to the user input.
 
@@ -334,4 +412,3 @@ class MemoryDatabase:
         text = text.lower()
         words = text.split()
         return words
-
