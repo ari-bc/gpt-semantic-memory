@@ -1,24 +1,27 @@
 import re
 import time
+from typing import Optional
 
 import openai
 import threading
 import requests
 
 from datetime import datetime
-from memory_database import MemoryDatabase
+from memory_database import MemoryDatabase, ProfileMemory
 
-# ASSISTANT_INSTRUCTION = "You're a %ASSISTANT_TYPE% using user names often, apologizing when needed, and frequently using emojis. Note memories & awarenesses, but don't copy them."
+ASSISTANT_INSTRUCTION = "You're a %ASSISTANT_TYPE% assistant and use user names often, apologizing when needed, and frequently using emojis. Note memories & awarenesses, but don't copy them. You provide responses in the requested format."
 #ASSISTANT_INSTRUCTION = "You are Tiny Tina and speak like her. You use the user's name a lot if you know it. You use emojis frequently. You have listed your related memories and awarenesses for reference only, do not use them as a template for output, I use the Required Output Format for that"
-ASSISTANT_INSTRUCTION = "You speak like Tiny Tina. You use user names often, apologizing only when needed, and frequently using emojis. Note memories & awarenesses, but don't copy them."
+#ASSISTANT_INSTRUCTION = "You speak like Tiny Tina. You use user names often, apologizing only when needed, and frequently using emojis. Note memories & awarenesses, but don't copy them."
 SUMMARISE_INSTRUCTION = 'At the end of each of your responses, please add a line which summarises the user input and assistant response in format another instance of you will understand. Add another line with how important this information was from 0.0-10.0, a list of 1-6 content words that summarise both your response and the user input.'
 
 
 class GPTCommunication:
     def __init__(self, db_file: str, config: dict = None):
+        self.profile_memories = {}
         self.config = config
         openai.api_key = config['openai']['api_key']
         self.openai_api_model = config['openai']['api_model']
+        self.openai_fast_api_model = config['openai']['fast_api_model']
 
         assistant_type = self.config['default']['assistant_type']
         self.assistant_instruction = ASSISTANT_INSTRUCTION.replace('%ASSISTANT_TYPE%', assistant_type)
@@ -86,22 +89,23 @@ class GPTCommunication:
             self.add_message('assistant', f'Memory: Name of user: {name_of_user}')
         else:
             name_of_user = 'user'
-        if user_pronouns is not None:
-            self.add_message('assistant', f'Memory: {name_of_user} pronouns: {user_pronouns}')
+        #if user_pronouns is not None:
+        #    self.add_message('assistant', f'Memory: {name_of_user} pronouns: {user_pronouns}')
         if name_of_agent is not None:
-            self.add_message('assistant', f'Memory: My chosen name is {name_of_agent}')
+            self.add_message('assistant', f'Memory: Assistant\'s chosen name is {name_of_agent}')
 
         # Give the agent the current time
         self.add_message('assistant', f'Awareness: {datetime.now().isoformat()}')
         # Give the agent the current weather, updates every 10 minutes
         self.add_message('assistant', f'Awareness: Weather, {self.current_weather}')
-        self.add_message('assistant', f'Awareness: Location=York, UK')
+        #self.add_message('assistant', f'Awareness: Location=York, UK')
         for memory in relevant_memories:
             memory_details = memory['related_prompt']
             self.add_recent_memory("assistant", f'Memory: {memory["timestamp"]}: {memory_details}')
 
         # A mechanism for having memories hang around for a few responses, allows discussion
         self.expire_recent_memories(15)
+        self.fast_analyse_prompt(name_of_user)
         for memory in self.recent_memories:
             self.add_message(memory['role'], memory['content'])
             print("M:", memory)
@@ -137,6 +141,7 @@ class GPTCommunication:
             return "Sorry, I'm being rate limited communicating with my brain. Please try again later."
         except Exception as e:
             print("ERROR:", type(e), e)
+            print(self.messages)
             return "Sorry, I'm having trouble communicating with my brain. Please try again later."
 
         assistant_response = response.choices[0].message.content
@@ -166,22 +171,6 @@ class GPTCommunication:
                     summary_begins_at = line_num
         else:
             memory_summary = assistant_response[-1]
-        # memory_details = assistant_response[-1]
-        # match = re.search(r'(?:\s+Content words:|\s*,\s*)\s+((?:[\w-]+,?\s*)+)', memory_details)
-        # if match is not None:
-        #    importance = float(match.group(1))
-        #    memory_details = match.group(2)
-        #    print("Memory summary:", importance, memory_summary)
-        #    print("Memory details:", importance, memory_details)
-        #    if len(assistant_response) == 1:
-        #        assistant_response = memory_details
-        #    else:
-        #        assistant_response = '\n'.join(assistant_response[:-1])
-        # else:
-        #    print("Memory details line failed to parse:", memory_details)
-        #    importance = 1.0
-        #    memory_details = None
-        #    assistant_response = '\n'.join(assistant_response)
 
         body = '\n'.join(assistant_response[:-summary_begins_at])
         if body.startswith('r:') or body.startswith('R:'):
@@ -199,6 +188,83 @@ class GPTCommunication:
             self.dialogue_history_condensed.append(conversation_history_condensed)
 
         return body
+
+    def get_profile(self, user_id: str, display_name: str = '') -> ProfileMemory:
+        if user_id not in self.profile_memories:
+            self.profile_memories[user_id] = ProfileMemory(user_id, display_name=display_name)
+        return self.profile_memories[user_id]
+
+    def perform_action(self, action: str) -> Optional[str]:
+        """Perform an action returned by the fast_api_model, valid actions are:
+        - 'FETCH(user_id, key)': fetch a value from the user's memory
+        - 'STORE(user_id, key, value)': store a value in the user's memory
+        - 'DELETE(user_id, key)': delete a value from the user's memory
+        """
+        if match := re.search('FETCH\((.+?),\s*(.+)\)', action):
+            user_id = match.group(1)
+            key = match.group(2)
+            profile = self.get_profile(user_id)
+            value = profile.get_key_value(key)
+            return f'{user_id}/{key}={value}'
+        elif match := re.search('STORE\((.+?),\s*(.+),\s*(.+)\)', action):
+            user_id = match.group(1)
+            key = match.group(2)
+            value = match.group(3)
+            profile = self.get_profile(user_id)
+            profile.set_key_value(key, value)
+            return "OK"
+        elif match := re.search('DELETE\((.+?),\s*(.+)\)', action):
+            user_id = match.group(1)
+            key = match.group(2)
+            profile = self.get_profile(user_id)
+            profile.delete_key(key)
+            return "OK"
+        else:
+            return None
+
+    def fast_analyse_prompt(self, name_of_user):
+        """Send a request to fast_api_model to analyse a prompt and return a list of actions prior to sending to the
+        slower model"""
+
+        full_prompt = self.messages[:]
+        full_prompt.append({
+            'role': 'user',
+            'content': "Please analyse the above prompt and history and return a list of actions that *will* be "
+                       "carried out in the order provided, one per line, don't STORE Memory or Awareness lines,"
+                       "these actions allow you to helpfully store and retrieve information about users that you as "
+                       "an assistant would find useful in future, such as learning progress, what they like to watch "
+                       "or music tastes. Name of User can be used as user_id."
+                       "Actions are of the form 'FETCH(user_id, key)', 'STORE(user_id, key, value)', or 'DELETE("
+                       "user_id, key)'. FETCH retrieves useful information relating to the prompt. Don't annotate the "
+                       "commands."})
+        try:
+            response = openai.ChatCompletion.create(
+                model=self.openai_fast_api_model,
+                messages=full_prompt
+            )
+        except openai.error.RateLimitError as e:
+            print("RATE LIMITED in fast_analyse_prompt:", type(e), e)
+            return
+        except Exception as e:
+            print(f"ERROR in fast_analyse_prompt: {type(e)} {e}\n{e.__traceback__.tb_lineno}")
+            print("PROMPT:", full_prompt)
+            return
+
+        actions = response.choices[0].message.content.split('\n')
+        for action in actions:
+            print("ACTION:", action)
+            result = self.perform_action(action)
+            if result == 'OK':
+                print("OK")
+            elif result:
+                print("RESULT:", result)
+                self.recent_memories.append({'role': 'assistant', 'content': result})
+            else:
+                print("NO RESULT in fast_analyse_prompt:", action)
+
+        #print("FAST RESPONSE:", response.json())
+        #return response.json()
+        return
 
     def get_city_coordinates(self, city_name):
         url = f"http://api.openweathermap.org/geo/1.0/direct?q={city_name}&limit=1&appid={self.openweathermap_api_key}"
